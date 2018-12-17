@@ -1,9 +1,11 @@
 package goetty
 
+// RawDecoder decoder raw byte array
 type RawDecoder struct {
 }
 
-func (decoder RawDecoder) Decode(in *ByteBuf) (bool, interface{}, error) {
+// Decode decode with raw byte array
+func (decoder *RawDecoder) Decode(in *ByteBuf) (bool, interface{}, error) {
 	_, data, err := in.ReadMarkedBytes()
 
 	if err != nil {

@@ -2,122 +2,73 @@ package main
 
 import (
 	"flag"
-	"time"
-
+	"fmt"
 	"net/http"
 
-	"strconv"
-
 	"github.com/labstack/echo"
-	sd "github.com/labstack/echo/engine/standard"
-	mw "github.com/labstack/echo/middleware"
+	md "github.com/labstack/echo/middleware"
 )
 
 var (
-	addr = flag.String("addr", ":80", "listen addr.(e.g. ip:port)")
+	addr = flag.String("addr", "127.0.0.1:9090", "addr for backend")
 )
-
-type Cookie struct {
-	name     string
-	value    string
-	path     string
-	domain   string
-	expires  time.Time
-	secure   bool
-	httpOnly bool
-}
-
-func (c Cookie) Name() string {
-	return c.name
-}
-
-func (c Cookie) Value() string {
-	return c.value
-}
-
-func (c Cookie) Path() string {
-	return c.path
-}
-
-func (c Cookie) Domain() string {
-	return c.domain
-}
-
-func (c Cookie) Expires() time.Time {
-	return c.expires
-}
-
-func (c Cookie) Secure() bool {
-	return c.secure
-}
-
-func (c Cookie) HTTPOnly() bool {
-	return c.httpOnly
-}
 
 func main() {
 	flag.Parse()
 
-	e := echo.New()
+	server := echo.New()
+	server.Use(md.Logger())
 
-	e.SetDebug(true)
-
-	e.Use(mw.Logger())
-	e.Use(mw.Recover())
-
-	e.Get("/check", check())
-	e.Get("/api/call", call())
-	e.Get("/api/wait", wait())
-	e.Get("/api/cookie", cookie())
-	e.Get("/api/set-cookie", setCookie())
-	e.Get("/api/query", query())
-
-	e.Run(sd.New(*addr))
-}
-
-func check() echo.HandlerFunc {
-	return func(c echo.Context) error {
+	server.GET("/check", func(c echo.Context) error {
 		return c.String(http.StatusOK, "OK")
-	}
-}
+	})
 
-func call() echo.HandlerFunc {
-	return func(c echo.Context) error {
-		return c.JSON(http.StatusOK, *addr)
-	}
-}
+	server.GET("/error", func(c echo.Context) error {
+		return c.NoContent(http.StatusBadRequest)
+	})
 
-func wait() echo.HandlerFunc {
-	return func(c echo.Context) error {
-		sec := c.QueryParam("value")
-		s, _ := strconv.Atoi(sec)
-		time.Sleep(time.Second * time.Duration(s))
-		return c.JSON(http.StatusOK, *addr)
-	}
-}
+	server.GET("/v1/components/:id", func(c echo.Context) error {
+		value := make(map[string]interface{})
+		data := make(map[string]interface{})
+		user := make(map[string]interface{})
+		user["id"] = c.Param("id")
+		user["name"] = fmt.Sprintf("v1-name-%s", c.Param("id"))
+		data["user"] = user
+		data["source"] = *addr
 
-func cookie() echo.HandlerFunc {
-	return func(c echo.Context) error {
-		ck, _ := c.Cookie("value")
-		c.SetCookie(ck)
-		return c.JSON(http.StatusOK, ck.Value())
-	}
-}
-
-func setCookie() echo.HandlerFunc {
-	return func(c echo.Context) error {
-		value := c.QueryParam("value")
-		c.SetCookie(&Cookie{
-			name:  "value",
-			value: value,
-			path:  "/",
-		})
+		value["code"] = "0"
+		value["data"] = data
 		return c.JSON(http.StatusOK, value)
-	}
-}
+	})
+	server.GET("/v1/users/:id", func(c echo.Context) error {
+		user := make(map[string]interface{})
+		user["id"] = c.Param("id")
+		user["name"] = fmt.Sprintf("v1-name-%s", c.Param("id"))
+		user["source"] = *addr
+		return c.JSON(http.StatusOK, user)
+	})
+	server.GET("/v1/account/:id", func(c echo.Context) error {
+		account := make(map[string]interface{})
+		account["id"] = c.Param("id")
+		account["source"] = *addr
+		account["account"] = fmt.Sprintf("v1-account-%s", c.Param("id"))
+		return c.JSON(http.StatusOK, account)
+	})
 
-func query() echo.HandlerFunc {
-	return func(c echo.Context) error {
-		return c.JSON(http.StatusOK, c.QueryParam("value"))
-	}
+	server.GET("/v2/users/:id", func(c echo.Context) error {
+		user := make(map[string]interface{})
+		user["id"] = c.Param("id")
+		user["source"] = *addr
+		user["name"] = fmt.Sprintf("v2-name-%s", c.Param("id"))
+		return c.JSON(http.StatusOK, user)
+	})
+	server.GET("/v2/account/:id", func(c echo.Context) error {
+		account := make(map[string]interface{})
+		account["id"] = c.Param("id")
+		account["source"] = *addr
+		account["account"] = fmt.Sprintf("v2-account-%s", c.Param("id"))
+		return c.JSON(http.StatusOK, account)
+	})
+
+	server.Start(*addr)
 }

@@ -1,89 +1,98 @@
+<img src="./images/logo.png" height=80></img>
+
+[![Gitter](https://badges.gitter.im/fagongzi/gateway.svg)](https://gitter.im/fagongzi/gateway?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
+[![Build Status](https://api.travis-ci.org/fagongzi/gateway.svg)](https://travis-ci.org/fagongzi/gateway)
+[![Go Report Card](https://goreportcard.com/badge/github.com/fagongzi/gateway)](https://goreportcard.com/report/github.com/fagongzi/gateway)
+
 Gateway
 -------
-Gateway is a API gateway based on http. It works at 7 layer.
+Gateway 是一个基于HTTP协议的restful的API网关。可以作为统一的API接入层。
 
-# Features
-* Traffic Control
-* Circuit Breaker
-* Loadbalance
-* Routing based on URL
-* API aggregation
-* Backend Server heath check
-* Use [fasthttp](https://github.com/valyala/fasthttp)
-* Admin WEBUI
+## Features
+* 流量控制
+* 熔断
+* 负载均衡
+* 服务发现
+* 插件机制
+* 路由(分流，复制流量)
+* API 聚合
+* API 参数校验
+* API 访问控制（黑白名单）
+* API 默认返回值
+* API 定制返回值
+* API 结果Cache
+* JWT Authorization
+* API Metric导入Prometheus
+* API 失败重试
+* 后端server的健康检查
+* 开放管理API(GRPC、Restful)
+* 支持websocket
+* 支持在线迁移数据
 
-# Install
-----
-Gateway dependency[etcd](https://github.com/coreos/etcd)
+## Docker
+### 快速开始
+使用 `docker pull fagongzi/gateway` 命令下载Docker镜像, 使用 `docker run -d -p 9093:9093 -p 80:80 -p 9092:9092 fagongzi/gateway` 运行镜像. 镜像启动后export 3个端口:
 
-## Compile from source
-```
-git clone https://github.com/fagongzi.git
-cd $GOPATH/src/github.com/fagongzi/gateway
-go build cmd/proxy/proxy.go
-go build cmd/admin/admin.go
-```
+* 80
 
-# Architecture
+  Proxy的http端口，这个端口就是直接为终端用户服务的
+
+* 9092
+
+  APIServer的对外GRPC的端口
+
+* 9093
+
+  APIServer的对外HTTP Restful的端口，访问 `http://127.0.0.1:9093/ui/index.html`访问WEBUI
+
+
+### 可用的docker镜像
+
+* `fagongzi/gateway` 
+
+   镜像是一个quickstart镜像，包含了3个组件：etcd,proxy,apiserver， `仅限于快速体验，不能使用在生产`
+
+* `fagongzi/proxy` 
+
+   proxy组件，`生产可用`
+
+* `fagongzi/apiserver` 
+
+   apiserver组件，`生产可用`
+
+## 架构
 ![](./images/arch.png)
 
-## Components
-Gateway has three component: proxy, admin, etcd.
+## WebUI
+可用的Gateway的WebUI的项目：
+* [官方](https://github.com/fagongzi/gateway-ui-vue)
+* [gateway_ui](https://github.com/archfish/gateway_ui)
+* [gateway_admin_ui](https://github.com/wilehos/gateway_admin_ui)
+
+## 组件
+Gateway由`proxy`, `apiserver`组成
 
 ### Proxy
-The proxy provide http server. Proxy is stateless, you can scale proxy node to deal with large traffic.
+Proxy是Gateway对终端用户提供服务的组件，Proxy是一个无状态的节点，可以部署多个来支撑更大的流量，[更多](./docs/proxy.md)。
 
-### Admin 
-The admin is a backend manager system. Admin also is a stateless node, you can use a Nginx node for HA. One Admin node can manager a set of proxy which has a same etcd prefix configuration.
+### ApiServer
+ApiServer对外提供GRPC和Restful来管理元信息，ApiServer同时集成了官方的WebUI，[更多](./docs/apiserver.md)。
 
-### Etcd
-The Etcd store gateway's mete data.
+## Gateway中的概念
+### Server
+Server是一个真实的后端服务，[更多](./docs/server.md)。
 
-## Concept of gateway
+### Cluster
+Cluster是一个逻辑概念，它由一组提供相同服务的Server组成。会依据负载均衡策略选择一个可用的Server，[更多](./docs/cluster.md)。
 
-* Server
-Server is a backend server which provide restfule json service.The server is the basic unit at gateway.
+### API
+API是Gateway的核心概念，我们可以在Gateway的中维护对外的API，以及API的分发规则，聚合规则以及URL匹配规则，[更多](./docs/api.md)。
 
-* Cluster
-Cluster is a set of servers which provide the same service. The Loadbalancer select a usable server to use.
+### Routing
+Routing是一个路由策略，根据HTTP Request中的Cookie，Querystring、Header、Path中的一些信息把流量分发到或者复制到指定的Cluster，通过这个功能，我们可以实现AB Test和线上引流，[更多](./docs/routing.md)。
 
-* Aggregation
-Aggregation is a set of URLs that correspond to some clusters. A http request arrive proxy, the proxy dispatcher the request to specify clusters, then wait responses and merge to response client.
+### 参与开发
+[更多](./docs/build.md)
 
-* Routing
-Routing is a approach to control http traffic to clusters. You can use cookie, query string, request header infomation in a expression for control.
-
-# What gateway can help you
-## Redefine your API URL
-Your backend server provide some restful API, You can redefine the API URL that provide to API caller.Use this funcation you can provide beautiful APIs.  
-
-## Dynamic URL & Aggregation
-You can define a URL and configuration a URL set which you want to aggregation.
-
-## Protect backend server
-Gateway can use **Traffic Control** and **Circuit Breaker** functions to avoid backend crash by hight triffic.
-
-## AB Test
-Gateway's **Routing** fucntion can help your AB Test.
-
-## Admin UI
-![](./images/dashboard.png)
-
-## proxy管理
-![](./images/proxy.png)
-
-## cluster管理
-![](./images/cluster.png)
-
-## server管理
-![](./images/server.png)
-
-## 聚合管理
-![](./images/aggregations.png)
-
-## routing管理
-![](./images/routing.png)
-
-## 监控
-![](./images/metries.png)
-
+# 交流方式-微信
+![](./images/qr.jpg)

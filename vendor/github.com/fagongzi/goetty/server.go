@@ -1,88 +1,98 @@
 package goetty
 
 import (
-	"github.com/CodisLabs/codis/pkg/utils/atomic2"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-type IdGenerator interface {
-	NewId() interface{}
+// Closer is a closer
+type Closer interface {
+	Close() error
 }
 
-type Int64IdGenerator struct {
-	counter atomic2.Int64
+// MessageWriter is a message writer
+type MessageWriter interface {
+	Write(msg interface{}) error
 }
 
-func (self Int64IdGenerator) NewId() interface{} {
-	return self.counter.Incr()
+// MessageReader is a message reader
+type MessageReader interface {
+	Read() (interface{}, error)
+	ReadTimeout(timeout time.Duration) (interface{}, error)
 }
 
-func NewInt64IdGenerator() IdGenerator {
-	return &Int64IdGenerator{}
+// IDGenerator ID Generator interface
+type IDGenerator interface {
+	NewID() interface{}
 }
 
+// Int64IDGenerator int64 id Generator
+type Int64IDGenerator struct {
+	counter int64
+}
+
+// NewInt64IDGenerator create a uuid v4 generator
+func NewInt64IDGenerator() IDGenerator {
+	return &Int64IDGenerator{}
+}
+
+// NewID return a id
+func (g *Int64IDGenerator) NewID() interface{} {
+	return atomic.AddInt64(&g.counter, 1)
+}
+
+// UUIDV4IdGenerator uuid v4 generator
 type UUIDV4IdGenerator struct {
 }
 
-func (self UUIDV4IdGenerator) NewId() interface{} {
+// NewID return a id
+func (g *UUIDV4IdGenerator) NewID() interface{} {
 	return NewV4UUID()
 }
 
-func NewUUIDV4IdGenerator() IdGenerator {
+// NewUUIDV4IdGenerator create a uuid v4 generator
+func NewUUIDV4IdGenerator() IDGenerator {
 	return &UUIDV4IdGenerator{}
 }
-
-var (
-	in  sync.Pool
-	out sync.Pool
-)
 
 type sessionMap struct {
 	sync.RWMutex
 	sessions map[interface{}]IOSession
 }
 
-const DEFAULT_SESSION_SIZE = 64
-
+// Server tcp server
 type Server struct {
 	addr     string
 	listener *net.TCPListener
 
+	opts        *serverOptions
 	sessionMaps map[int]*sessionMap
 
-	readBufSize, writeBufSize int
-
-	decoder Decoder
-	encoder Encoder
-
-	generator IdGenerator
-
+	startCh  chan struct{}
 	stopOnce *sync.Once
 	stopped  bool
 }
 
-func NewServer(addr string, decoder Decoder, encoder Encoder, generator IdGenerator) *Server {
-	return NewServerSize(addr, decoder, encoder, BUF_READ_SIZE, BUF_WRITE_SIZE, generator)
-}
+// NewServer create server
+func NewServer(addr string, opts ...ServerOption) *Server {
+	sopts := &serverOptions{}
+	for _, opt := range opts {
+		opt(sopts)
+	}
+	sopts.adjust()
 
-func NewServerSize(addr string, decoder Decoder, encoder Encoder, readBufSize, writeBufSize int, generator IdGenerator) *Server {
 	s := &Server{
 		addr:        addr,
-		sessionMaps: make(map[int]*sessionMap, DEFAULT_SESSION_SIZE),
-
-		decoder:      decoder,
-		encoder:      encoder,
-		readBufSize:  readBufSize,
-		writeBufSize: writeBufSize,
-
-		generator: generator,
+		sessionMaps: make(map[int]*sessionMap, sopts.sessionBucketSize),
+		opts:        sopts,
 
 		stopOnce: &sync.Once{},
+		startCh:  make(chan struct{}, 1),
 	}
 
-	for i := 0; i < DEFAULT_SESSION_SIZE; i++ {
+	for i := 0; i < sopts.sessionBucketSize; i++ {
 		s.sessionMaps[i] = &sessionMap{
 			sessions: make(map[interface{}]IOSession),
 		}
@@ -91,37 +101,41 @@ func NewServerSize(addr string, decoder Decoder, encoder Encoder, readBufSize, w
 	return s
 }
 
-func (self *Server) Stop() {
-	self.stopOnce.Do(func() {
-		self.stopped = true
-		self.listener.Close()
+// Started returns a chan that used for server started
+func (s *Server) Started() chan struct{} {
+	return s.startCh
+}
 
-		for _, sessions := range self.sessionMaps {
-			for _, session := range sessions.sessions {
-				session.Close()
-			}
-		}
+// Stop stop server
+func (s *Server) Stop() {
+	s.stopOnce.Do(func() {
+		s.stopped = true
+		s.listener.Close()
+		close(s.startCh)
 	})
 }
 
-func (self *Server) Serve(loopFn func(IOSession) error) error {
-	addr, err := net.ResolveTCPAddr("tcp", self.addr)
+// Start start the server, this method will block until occur a error
+func (s *Server) Start(loopFn func(IOSession) error) error {
+	addr, err := net.ResolveTCPAddr("tcp", s.addr)
 
 	if err != nil {
 		return err
 	}
 
-	self.listener, err = net.ListenTCP("tcp", addr)
+	s.listener, err = net.ListenTCP("tcp", addr)
 
 	if err != nil {
 		return err
 	}
+
+	s.startCh <- struct{}{}
 
 	var tempDelay time.Duration
 	for {
-		conn, err := self.listener.AcceptTCP()
+		conn, err := s.listener.AcceptTCP()
 
-		if self.stopped {
+		if s.stopped {
 			if nil != conn {
 				conn.Close()
 			}
@@ -146,40 +160,44 @@ func (self *Server) Serve(loopFn func(IOSession) error) error {
 		}
 		tempDelay = 0
 
-		session := newClientIOSession(self.generator.NewId(), conn, self)
-		self.addSession(session)
+		session := newClientIOSession(s.opts.generator.NewID(), conn, s)
+		s.addSession(session)
 
 		go func() {
 			loopFn(session)
-			self.deleteSession(session)
+			session.Close()
+			s.deleteSession(session)
 		}()
 	}
 }
 
-func (self *Server) closeSession(session IOSession) {
-	self.deleteSession(session)
-	session.Close()
-}
-
-func (self *Server) addSession(session IOSession) {
-	m := self.sessionMaps[session.Hash()%DEFAULT_SESSION_SIZE]
+func (s *Server) addSession(session IOSession) {
+	m := s.sessionMaps[session.Hash()%DefaultSessionBucketSize]
 	m.Lock()
-	m.sessions[session.Id()] = session
+	m.sessions[session.ID()] = session
 	m.Unlock()
+
+	for _, sm := range s.opts.middlewares {
+		sm.Connected(session)
+	}
 }
 
-func (self *Server) deleteSession(session IOSession) {
-	m := self.sessionMaps[session.Hash()%DEFAULT_SESSION_SIZE]
+func (s *Server) deleteSession(session IOSession) {
+	m := s.sessionMaps[session.Hash()%DefaultSessionBucketSize]
 	m.Lock()
-	delete(m.sessions, session.Id())
+	delete(m.sessions, session.ID())
 	m.Unlock()
+
+	for _, sm := range s.opts.middlewares {
+		sm.Closed(session)
+	}
 }
 
-func (self *Server) GetSession(id interface{}) IOSession {
-	m := self.sessionMaps[getHash(id)%DEFAULT_SESSION_SIZE]
+// GetSession get session by id
+func (s *Server) GetSession(id interface{}) IOSession {
+	m := s.sessionMaps[getHash(id)%DefaultSessionBucketSize]
 	m.RLock()
-	s := m.sessions[id]
+	session := m.sessions[id]
 	m.RUnlock()
-	return s
+	return session
 }
-
